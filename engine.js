@@ -2,6 +2,7 @@ const canvasDebug = document.querySelector('#canvasDebug');
 const canvasMain = document.querySelector('#canvasMain');
 
 let debuging = false;
+let game;
 
 const joystick	= new VirtualJoystick({container	: document.querySelector('body')});
 
@@ -55,7 +56,7 @@ class Game{
         const intersect = ray.intersectsWall(wall)
         if(intersect){
           ray.color = 'rgb(0, 0, 255)';
-          if(wall.solid){
+          if(wall.transparent){
             ray.end = {x: intersect.x, y: intersect.y}
             if(debuging) ray.color = 'rgb(255, 0, 0)';
           }
@@ -64,10 +65,23 @@ class Game{
             wall: wall,
             ray: ray,
             index: index,
+            intersect: intersect,
           });
         }
       });
       if(debuging) game.debugCanvas.drawLine(ray.start.x, ray.start.y, ray.end.x, ray.end.y, ray.color);
+      game.entities.forEach(entity => {
+        let intersect = ray.intersectsWall(entity.line);
+        if(intersect){
+          toDraw.push({
+            distance: calcDistance(intersect.x, intersect.y, player.x, player.y, ray.angleFromCenter),
+            entity: entity,
+            ray: ray,
+            index: index,
+            intersect: intersect,
+          })
+        }
+      });
     });
     toDraw.sort(function(a, b){
       if(a.distance < b.distance) return 1;
@@ -75,7 +89,24 @@ class Game{
       return 0;
     });
     toDraw.forEach(obj => {
-      game.mainCanvas.drawRay(obj.index * game.mainCanvas.canvas.width / game.player.numRays, game.mainCanvas.canvas.height - obj.distance, obj.wall.color, game.mainCanvas.canvas.width / game.player.numRays);
+      let x = obj.index * game.mainCanvas.canvas.width / game.player.numRays;
+      let height = game.mainCanvas.canvas.height - obj.distance;
+      let width = game.mainCanvas.canvas.width / game.player.numRays;
+      if(typeof obj.wall != 'undefined'){
+        //  drawRay(x, height, color, width){
+        let img = obj.wall.image;
+        if(obj.wall.image){
+          const percent = obj.wall.getPercent(obj.intersect)
+          game.mainCanvas.drawImageRay(x, height, img, percent.x, percent.y, width);
+        }
+        else game.mainCanvas.drawRay(x, height, obj.wall.color, width);
+      }
+      else if(typeof obj.entity != 'undefined'){
+        //   drawImageRay(x, height, img, column, width){
+        let entity = obj.entity;
+        // game.mainCanvas.drawImageRay(x, height, entity.image.image, entity.getColumn(obj.index), width)
+        game.mainCanvas.drawImageRay(x, height, entity.image.image, entity.getPercent(obj.intersect), width)
+      }
     });
     if(debuging){
       game.debugCanvas.drawPoint(game.player.x, game.player.y);
@@ -86,10 +117,13 @@ class Game{
     game.entities.forEach(entity => {
       game.debugCanvas.drawLine(entity.line.start.x, entity.line.start.y, entity.line.end.x, entity.line.end.y);
     });
-    if(debuging)
     game.walls.forEach(wall => {
-      game.debugCanvas.drawLine(wall.start.x, wall.start.y, wall.end.x, wall.end.y);
+      if(debuging) game.debugCanvas.drawLine(wall.start.x, wall.start.y, wall.end.x, wall.end.y);
+      if(wall.solid){
+        if(wall.containsPoint(player)) player.revertPrev();
+      }
     });
+    game.time++;
   }
 }
 
@@ -147,43 +181,97 @@ class ScreenMain extends Screen{
     this.ctx.fillStyle = typeof color == 'undefined'? 'rgb(0, 0, 0)': color;
     this.ctx.fillRect(x, this.canvas.height/2 - height/2, width, height);
   }
-  drawDataRay(x, height, data, width){
+  drawImageRay(x, height, img, column, yMask, width){
+    // console.log(arguments);
+    // console.log(x, height, img, column, width);
     width = typeof width == 'undefined'? 1: width;
-    height = height / data.length;
-    let y = this.canvas.height/2 - height/2;
-    data.forEach((rgb, i) => {
-      this.ctx.fillStyle = rgb;
-      this.ctx.fillRect(x, y + height*2, width, height);
-    });
+    this.ctx.drawImage(img.image, column, yMask, 1, img.getHeight(), x, this.canvas.height/2 - height/2, width, height);
   }
 }
 
 class Image{
   constructor(src){
+    this.src = src
     this.wrapper = document.querySelector('#raycastingImageWrapper');
-    this.wrapper.innerHTML += `<img src="${src}" id="${src}" />`;
+    if(src.indexOf('.mp4') == -1) this.wrapper.innerHTML += `<img src="${src}" id="${src}" />`;
+    else this.wrapper.innerHTML += `
+    <video id="${src}" autoplay="autoplay" loop="true" muted>
+      <source src="${src}" type="video/mp4">
+    </video>`;
     this.image = document.getElementById(src);
-    this.wrapper.innerHTML += `
-    <canvas id="canvas${src}" width="${this.image.width}" height="${this.image.height}"></canvas>
-    `;
-    this.canvas = document.getElementById(`canvas${src}`);
-    this.ctx = this.canvas.getContext('2d');
-    self = this;
-    this.image.onload = function(){
-      self.ctx.drawImage(self.image, 0, 0);
+    if(src.indexOf('.mp4') == -1) {
+      this.width = this.image.width;
+      this.height = this.image.height;
+    }
+    else{
+      this.width = this.image.videoWidth;
+      this.height = this.image.videoHeight;
     }
   }
-  init(){
-    this.ctx.drawImage(this.image, 0, 0);
+  getWidth(){
+    if(this.src.indexOf('.mp4') == -1) {
+      return this.image.width;
+    }
+    else{
+      return this.image.videoWidth;
+    }
+  }
+  getHeight(){
+    if(this.src.indexOf('.mp4') == -1) {
+      return this.image.height;
+    }
+    else{
+      return this.image.videoHeight;
+    }
+  }
+  getPercent(intersect, wall){
+    let d = calcDistance(wall.start.x, wall.start.y, intersect.x, intersect.y);
+    return {x: scale(d, 0, wall.length, 0, this.getWidth()), y: 0};
+  }
+}
+
+class SpriteSheet extends Image{
+  constructor(image, width, height, amnt, fps){
+    super(image);
+    this.frame = 0;
+    this.rows = Math.round(this.image.height / height);
+    this.columns = Math.round(this.image.width / width);
+    this.cellWidth = width;
+    this.cellHeight = height;
+    this.fps = fps;
+    this.frames = amnt;
+  }
+  getPercent(intersect, wall){
+    let p = super.getPercent(intersect, wall);
+    return {x: p.x + this.cellWidth * this.getColumn(), y: p.y * this.cellHeight * this.getRow()};
+  }
+  getColumn(){
+    return Math.ceil(this.getFrame() / this.rows);
+  }
+  getRow(){
+    return Math.ceil(this.getFrame() / this.columns);
+  }
+  getFrame(){
+     let elapsed = game.time / game.fps;
+     return Math.ceil(elapsed * this.fps) % this.frames;
+  }
+  getWidth(){
+    return this.cellWidth;
+  }
+  getHeight(){
+    return this.cellHeight;
   }
 }
 
 class Entity{
-  constructor(x, y, image){
+  constructor(x, y, image, buffer){
     this.x = x;
     this.y = y;
     this.image = new Image(image);
+    this.buffer = typeof buffer == 'undefined'? 1: buffer;
     this.angle = 0
+    this.prevX = x;
+    this.prevY = y;
     this.line = new Ray(x, y, this.angle, 0, this.image.image.width);
   }
   moveX(amnt){
@@ -197,6 +285,7 @@ class Entity{
   }
   moveToAngle(angle, amnt){
     let dir = this.dirFromAngle(angle, amnt);
+    this.updatePrev(this.x, this.y);
     this.x += dir[0];
     this.y += dir[1];
   }
@@ -215,11 +304,26 @@ class Entity{
   rotate(ang){
     this.angle += ang;
   }
+  updatePrev(x, y){
+    this.prevX = x;
+    this.prevY = y;
+  }
+  revertPrev(){
+    this.x = this.prevX;
+    this.y = this.prevY;
+  }
+  getColumn(index){
+    // console.log(this.image.width);
+    return scale(index, 0, game.player.numRays, 0, this.image.width);
+  }
+  getPercent(intersect){
+    return this.image.getPercent(intersect, this.line);
+  }
 }
 
 class Player extends Entity{
-  constructor(x, y, image){
-    super(x, y, image);
+  constructor(x, y, image, buffer){
+    super(x, y, image, buffer);
     this.fov = 110;
     this.numRays = 800;
     this.rays = [];
@@ -233,6 +337,15 @@ class Player extends Entity{
       const angleFromCenter = this.fov / (this.numRays / indexFromCenter);
       this.rays.push(new Ray(this.x, this.y, this.angle + i*inc, angleFromCenter));
     }
+    // let distToProj = (this.numRays/2) / Math.tan((this.fov/2) * (Math.PI / 180));
+    // for(let i = 0; i < this.numRays; i++){
+    //   let ang = Math.atan((i-(this.numRays/2)) / distToProj);
+    //   ang += this.angle * (Math.PI / 180);
+    //   ang *= (180 / Math.PI);
+    //   const indexFromCenter = Math.abs(this.numRays/2 - i)
+    //   const angleFromCenter = this.fov / (this.numRays / indexFromCenter);
+    //   this.rays.push(new Ray(this.x, this.y, ang, angleFromCenter));
+    // }
   }
 }
 
@@ -262,18 +375,36 @@ class Ray{
 }
 
 class Wall{
-  constructor(x, y, a, b, color, solid){
+  constructor(x, y, a, b, color, transparent, solid, image){
     this.color = typeof color == 'undefined'? 'rgb(0, 0, 0)': color;
+    this.transparent = typeof transparent == 'undefined'? true: transparent;
     this.solid = typeof solid == 'undefined'? true: solid;
     this.start = {x: x, y: y};
     this.end = {x: a, y: b};
+    this.length = calcDistance(this.start.x, this.start.y, this.end.x, this.end.y);
+    if(image instanceof Image) this.image = image;
+    else if(typeof image == 'undefined') this.image = false;
+    else this.image = new Image(image);
+  }
+  containsPoint(a){
+    const dl = calcDistance(a.x, a.y, this.start.x, this.start.y);
+    const dr = calcDistance(a.x, a.y, this.end.x, this.end.y);
+
+    const buffer = typeof a.buffer == 'undefined'? 1: a.buffer;
+
+    return dl + dr >= this.length-buffer && dl + dr <= this.length + buffer;
+  }
+  getPercent(intersect){
+    return this.image.getPercent(intersect, this);
   }
 }
 
 function calcDistance(x, y, a, b, angle){
   const distance = Math.sqrt((a-x)**2 + (b-y)**2);
-  return distance * Math.cos(angle * (Math.PI / 180));
-  // return distance
+  if(typeof angle != 'undefined'){
+    return distance * Math.cos(angle * (Math.PI / 180));
+  }
+  return distance
 }
 
 function scale(num, inMin, inMax, outMin, outMax){
@@ -298,6 +429,7 @@ function refreshLoop() {
 refreshLoop();
 
 function init(game){
+  game = game;
   document.addEventListener('keydown', e => {
     // console.log(e.keyCode);
     game.keys[e.keyCode] = true;
